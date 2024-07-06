@@ -3,7 +3,7 @@
 # ------------------------------------------------------------------------------
 output "used_container" {
   description = "Used container for creating the endpoint"
-  value       = data.aws_sagemaker_prebuilt_ecr_image.deploy_image.registry_path
+  value       = data.aws_ecr_image.deploy_image.image_uri 
 }
 
 output "iam_role" {
@@ -30,7 +30,6 @@ output "sagemaker_endpoint_name" {
   description = "Name of the created Amazon SageMaker endpoint, used for invoking the endpoint, with sdks"
   value       = aws_sagemaker_endpoint.huggingface.name
 }
-
 
 output "tags" {
   value = var.tags

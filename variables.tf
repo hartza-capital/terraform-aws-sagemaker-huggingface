@@ -29,19 +29,6 @@ variable "image_tag" {
   default     = null
 }
 
-variable "instance_type" {
-  description = "The EC2 instance type to deploy this Model to. For example, `ml.p2.xlarge`."
-  type        = string
-  default     = null
-}
-
-variable "instance_count" {
-  description = "The initial number of instances to run in the Endpoint created from this Model. Defaults to 1."
-  type        = number
-  default     = 1
-}
-
-
 variable "hf_model_id" {
   description = "The HF_MODEL_ID environment variable defines the model id, which will be automatically loaded from [hf.co/models](https://huggingface.co/models) when creating or SageMaker Endpoint."
   type        = string

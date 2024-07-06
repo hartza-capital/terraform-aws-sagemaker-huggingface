@@ -7,28 +7,18 @@
 locals {
   framework_version = var.pytorch_version != null ? var.pytorch_version : var.tensorflow_version
   repository_name   = var.pytorch_version != null ? "huggingface-pytorch-inference" : "huggingface-tensorflow-inference"
-  device            = length(regexall("^ml\\.[g|p{1,3}\\.$]", var.instance_type)) > 0 ? "gpu" : "cpu"
-  image_key         = "${local.framework_version}-${local.device}"
+  image_key         = "${local.framework_version}-cpu"
   pytorch_image_tag = {
-    "1.7.1-gpu"  = "1.7.1-transformers${var.transformers_version}-gpu-py36-cu110-ubuntu18.04"
     "1.7.1-cpu"  = "1.7.1-transformers${var.transformers_version}-cpu-py36-ubuntu18.04"
-    "1.8.1-gpu"  = "1.8.1-transformers${var.transformers_version}-gpu-py36-cu111-ubuntu18.04"
     "1.8.1-cpu"  = "1.8.1-transformers${var.transformers_version}-cpu-py36-ubuntu18.04"
-    "1.9.1-gpu"  = "1.9.1-transformers${var.transformers_version}-gpu-py38-cu111-ubuntu20.04"
     "1.9.1-cpu"  = "1.9.1-transformers${var.transformers_version}-cpu-py38-ubuntu20.04"
     "1.10.2-cpu" = "1.10.2-transformers${var.transformers_version}-cpu-py38-ubuntu20.04"
-    "1.10.2-gpu" = "1.10.2-transformers${var.transformers_version}-gpu-py38-cu113-ubuntu20.04"
     "1.13.1-cpu" = "1.13.1-transformers${var.transformers_version}-cpu-py39-ubuntu20.04"
-    "1.13.1-gpu" = "1.13.1-transformers${var.transformers_version}-gpu-py39-cu117-ubuntu20.04"
     "2.0.0-cpu"  = "2.0.0-transformers${var.transformers_version}-cpu-py310-ubuntu20.04"
-    "2.0.0-gpu"  = "2.0.0-transformers${var.transformers_version}-gpu-py310-cu118-ubuntu20.04"
-    "2.1.0-cpu"  = "2.1.0-transformers${var.transformers_version}-cpu-py310-ubuntu20.04"
-    "2.1.0-gpu"  = "2.1.0-transformers${var.transformers_version}-gpu-py310-cu121-ubuntu20.04"
+    "2.1.0-cpu"  = "2.1.0-transformers${var.transformers_version}-cpu-py310-ubuntu22.04"
   }
   tensorflow_image_tag = {
-    "2.4.1-gpu" = "2.4.1-transformers${var.transformers_version}-gpu-py37-cu110-ubuntu18.04"
     "2.4.1-cpu" = "2.4.1-transformers${var.transformers_version}-cpu-py37-ubuntu18.04"
-    "2.5.1-gpu" = "2.5.1-transformers${var.transformers_version}-gpu-py36-cu111-ubuntu18.04"
     "2.5.1-cpu" = "2.5.1-transformers${var.transformers_version}-cpu-py36-ubuntu18.04"
   }
   sagemaker_endpoint_type = {
@@ -52,7 +42,7 @@ resource "random_string" "resource_id" {
 # ------------------------------------------------------------------------------
 
 
-data "aws_sagemaker_prebuilt_ecr_image" "deploy_image" {
+data "aws_ecr_image" "deploy_image" {
   repository_name = local.repository_name
   image_tag       = var.pytorch_version != null ? local.pytorch_image_tag[local.image_key] : local.tensorflow_image_tag[local.image_key]
 }
@@ -130,7 +120,7 @@ resource "aws_sagemaker_model" "model_with_model_artifact" {
 
   primary_container {
     # CPU Image
-    image          = data.aws_sagemaker_prebuilt_ecr_image.deploy_image.registry_path
+    image          = data.aws_ecr_image.deploy_image.image_uri
     model_data_url = var.model_data
     environment = {
       HF_TASK = var.hf_task
@@ -150,7 +140,7 @@ resource "aws_sagemaker_model" "model_with_hub_model" {
   tags               = var.tags
 
   primary_container {
-    image = data.aws_sagemaker_prebuilt_ecr_image.deploy_image.registry_path
+    image = data.aws_ecr_image.deploy_image.image_uri 
     environment = {
       HF_TASK           = var.hf_task
       HF_MODEL_ID       = var.hf_model_id
@@ -181,8 +171,6 @@ resource "aws_sagemaker_endpoint_configuration" "huggingface" {
   production_variants {
     variant_name           = "AllTraffic"
     model_name             = local.sagemaker_model.name
-    initial_instance_count = var.instance_count
-    instance_type          = var.instance_type
   }
 }
 
@@ -196,8 +184,6 @@ resource "aws_sagemaker_endpoint_configuration" "huggingface_async" {
   production_variants {
     variant_name           = "AllTraffic"
     model_name             = local.sagemaker_model.name
-    initial_instance_count = var.instance_count
-    instance_type          = var.instance_type
   }
   async_inference_config {
     output_config {
@@ -254,40 +240,4 @@ resource "aws_sagemaker_endpoint" "huggingface" {
   tags = var.tags
 
   endpoint_config_name = local.sagemaker_endpoint_config.name
-}
-
-# ------------------------------------------------------------------------------
-# AutoScaling configuration
-# ------------------------------------------------------------------------------
-
-
-locals {
-  use_autoscaling = var.autoscaling.max_capacity != null && var.autoscaling.scaling_target_invocations != null && !local.sagemaker_endpoint_type.serverless ? 1 : 0
-}
-
-resource "aws_appautoscaling_target" "sagemaker_target" {
-  count              = local.use_autoscaling
-  min_capacity       = var.autoscaling.min_capacity
-  max_capacity       = var.autoscaling.max_capacity
-  resource_id        = "endpoint/${aws_sagemaker_endpoint.huggingface.name}/variant/AllTraffic"
-  scalable_dimension = "sagemaker:variant:DesiredInstanceCount"
-  service_namespace  = "sagemaker"
-}
-
-resource "aws_appautoscaling_policy" "sagemaker_policy" {
-  count              = local.use_autoscaling
-  name               = "${var.name_prefix}-scaling-target-${random_string.resource_id.result}"
-  policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.sagemaker_target[0].resource_id
-  scalable_dimension = aws_appautoscaling_target.sagemaker_target[0].scalable_dimension
-  service_namespace  = aws_appautoscaling_target.sagemaker_target[0].service_namespace
-
-  target_tracking_scaling_policy_configuration {
-    predefined_metric_specification {
-      predefined_metric_type = "SageMakerVariantInvocationsPerInstance"
-    }
-    target_value       = var.autoscaling.scaling_target_invocations
-    scale_in_cooldown  = var.autoscaling.scale_in_cooldown
-    scale_out_cooldown = var.autoscaling.scale_out_cooldown
-  }
 }
